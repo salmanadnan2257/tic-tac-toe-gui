@@ -82,6 +82,13 @@ for another round without closing the window.
   make X and O both look the same shade of gray once placed. Using
   `disabledforeground` explicitly keeps the mark's real color after the cell
   is disabled.
+- **Drawing the all-8-win-lines diagram for the explainer PDFs.** My first
+  attempt tried to overlay all eight winning lines on one board using
+  hardcoded pixel coordinates, and the diagonal lines came out shifted and
+  overlapping the row lines because the coordinate math didn't account for
+  the board's flipped y-axis. I rebuilt it as eight small side-by-side boards
+  (one per line, grouped rows/columns/diagonals) instead of forcing everything
+  onto a single board, which was easier to get right and easier to read.
 
 ## What I learned
 
