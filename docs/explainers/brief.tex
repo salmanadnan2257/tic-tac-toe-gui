@@ -1,0 +1,380 @@
+% explainer-source-hash: 861400b897d7b1fa48553bd9cae0133347dd1552fda7a27409d9a04edad8c953
+% explainer-source-commit: aaa9d3ff8bf9a423477b01fafdb5b66d2a478f1c
+% explainer-generated: 2026-07-16
+% Regenerate with /explain-all (see WIRING.md). Do not edit this stamp by hand:
+% it is how the toolchain knows whether this document still matches the code.
+\documentclass[11pt,a4paper]{article}
+\input{preamble}
+
+\begin{document}
+
+\begin{center}
+{\LARGE\bfseries\color{inkblue} Tic Tac Toe (tkinter GUI)}\\[4pt]
+{\large\color{accent} Brief}\\[10pt]
+{\small Two Python files. No third-party dependencies. An opponent that cannot be beaten,\\
+and a script in the repository that proves it.}
+\end{center}
+\vspace{6pt}
+\hrule
+\vspace{12pt}
+
+% =========================================================================
+\section{The pitch in one page}
+
+A Tic Tac Toe game in a real window. Click a square, your mark appears, the program
+decides whether anyone has won. Two modes: two people at one keyboard, or one person
+against a computer that always wins or draws and never loses.
+
+That last claim is the whole point, and it is the reason the project is worth a
+document. ``Unbeatable'' is normally marketing. Here it is a property, and the
+repository contains the check that would catch it being false.
+
+\begin{keyidea}{The single decision everything else follows from}
+The rules live in \file{game.py}. The window lives in \file{main.py}. The arrow
+points one way: \file{main.py} imports \file{game.py}, and \file{game.py} imports
+nothing but \code{math}. It has never heard of a screen.
+
+That is why a script with no display attached can play out every game the AI can
+ever face. If the rules had been written inside the button handler, as they easily
+could have been at this size, the ``unbeatable'' claim would have been untestable
+and therefore just words.
+\end{keyidea}
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{
+\begin{tikzpicture}[node distance=16mm]
+  \node[box, minimum width=30mm] (user) {The person\\(mouse clicks)};
+  \node[box, right=of user, minimum width=42mm, minimum height=26mm] (gui)
+    {\textbf{main.py}\\\scriptsize widgets, colors, turn order,\\\scriptsize running score, the 400\,ms pause};
+  \node[box, right=of gui, minimum width=42mm, minimum height=26mm] (logic)
+    {\textbf{game.py}\\\scriptsize board, win lines, draw check,\\\scriptsize minimax + alpha-beta};
+  \node[store, right=of logic, minimum height=20mm] (board) {\code{board}\\9-cell list};
+  \node[extbox, above=10mm of gui, minimum width=42mm] (tk) {tkinter\\\scriptsize (standard library)};
+  \node[extbox, below=12mm of logic, minimum width=42mm] (tests) {\textbf{tests/}\\\scriptsize 6 unit tests +\\\scriptsize the proof script};
+
+  \draw[flow] (user) -- node[lbl, above] {click} (gui);
+  \draw[flow] (gui) -- node[lbl, above] {calls} (logic);
+  \draw[flow] (logic) -- (board);
+  \draw[dflow] (logic) to[bend right=16] node[lbl, below] {winner, line,\\or a move index} (gui);
+  \draw[dflow] (gui) to[bend right=16] node[lbl, below] {redraw} (user);
+  \draw[flow] (tk) -- (gui);
+  \draw[flow] (tests) -- node[lbl, right] {import\\directly,\\no window} (logic);
+
+  \begin{scope}[on background layer]
+    \node[fit=(gui)(tk), draw=linegrey, dashed, rounded corners, inner sep=4mm,
+          label={[font=\small\itshape, text=black!60]below:pixels}] {};
+    \node[fit=(logic)(board)(tests), draw=linegrey, dashed, rounded corners, inner sep=4mm,
+          label={[font=\small\itshape, text=black!60]above:rules}] {};
+  \end{scope}
+\end{tikzpicture}}
+\caption{The dependency arrow never points back. The tests reach past the window
+entirely, which is the property the project is built around.}
+\end{figure}
+
+% =========================================================================
+\section{The rules layer, and the bug that shaped it}
+
+Per the README, this started as a console practice script with a real defect: its
+win check only ever compared cells against \code{" X "}, so player O could complete
+a line and the game carried on regardless. It was written as eight \code{or}-chained
+comparisons, and one missing case in eight near-identical lines is exactly the kind
+of thing nobody sees.
+
+The rewrite does not add the missing check. It stops writing the check per mark:
+
+\begin{lstlisting}[language=Python]
+WIN_LINES = [
+    (0, 1, 2), (3, 4, 5), (6, 7, 8),  # rows
+    (0, 3, 6), (1, 4, 7), (2, 5, 8),  # columns
+    (0, 4, 8), (2, 4, 6),             # diagonals
+]
+
+def check_winner(board):
+    for line in WIN_LINES:
+        a, b, c = line
+        if board[a] != EMPTY and board[a] == board[b] == board[c]:
+            return board[a], line
+    return None
+\end{lstlisting}
+
+The board is one flat list of nine strings, indexed 0 to 8 left to right and top to
+bottom, so every win line is three plain integers. The mark is never named in the
+comparison: the test is ``these three cells match and are not empty'', which covers
+X and O in one code path. The bug becomes unrepresentable rather than merely fixed,
+and eight tuples can be checked by eye against a picture of a board in seconds,
+which eight branches cannot.
+
+\code{check\_winner} returns the winning \emph{line} as well as the mark, because the
+GUI wants to paint those three cells gold. The rules layer anticipates that need but
+answers it with three integers, not a colour. Around it sit six more small total
+functions: \code{new\_board}, \code{make\_move} (rejects an occupied or out-of-range
+cell by returning \code{False}), \code{is\_draw} (full board \emph{and} no winner),
+\code{is\_game\_over}, \code{available\_moves} and \code{other\_mark}.
+
+% =========================================================================
+\section{The AI}
+
+Tic Tac Toe is small. From an empty board there are at most $9! = 362{,}880$ move
+orderings, and a computer can look at all of them faster than a human blinks. So the
+AI does not use heuristics like ``take the centre''. It brute-forces the question.
+
+\begin{figure}[H]
+\centering
+\resizebox{0.88\textwidth}{!}{
+\begin{tikzpicture}[level distance=19mm, sibling distance=25mm,
+  every node/.style={box, minimum width=11mm, minimum height=7mm, font=\small}]
+  \node (root) {\textbf{9}}
+    child { node {\textbf{9}} child { node {9} } child { node {5} } }
+    child { node (b) {0} child { node {0} } child { node {7} } }
+    child { node {-8} child { node {-8} } child { node {3} } };
+  \node[lbl, left=20mm of root, text=inkblue, font=\small\bfseries] {MAX: the AI, takes\\the biggest child};
+  \node[lbl, below left=6mm and 22mm of root, text=inkblue, font=\small\bfseries] {MIN: the opponent,\\takes the smallest};
+  \node[lbl, below=30mm of root, xshift=-40mm, text=inkblue, font=\small\bfseries] {leaves: the game is over,\\so the score is a fact};
+\end{tikzpicture}}
+\caption{Minimax. Leaf scores are always from the AI's point of view: a win is
+positive, a loss negative, a draw zero. The AI assumes perfect defence at every MIN
+node and still finds a line it is happy with, which is why the guarantee holds
+against \emph{any} opponent rather than a merely bad one.}
+\end{figure}
+
+At a leaf, \code{\_score\_terminal} returns \code{10 - depth} for an AI win and
+\code{depth - 10} for a loss, where \code{depth} counts moves from the current board.
+The depth term is a tie-break: two winning paths, and the AI takes the shorter one,
+so it closes out a won game instead of shuffling. \code{best\_ai\_move} is the entire
+public surface, four lines wrapping the search into ``give me a board and a mark, get
+back an index''. The GUI has no idea a tree search happened.
+
+Alpha-beta pruning skips branches that cannot change the answer: if you have already
+secured a 5 elsewhere and this branch has already dropped to 3, the opponent will
+send you to the 3, so the rest of the branch is unreachable.
+
+\begin{keyidea}{Pruning is not why the AI is unbeatable}
+This is the distinction most write-ups blur, and the README names correcting it as
+one of the project's actual challenges. The guarantee comes \emph{entirely} from
+exhaustive minimax search. Delete alpha and beta and the AI is exactly as
+unbeatable, only slower. Bolt alpha-beta onto a broken search and you get a fast
+broken search. Pruning changes how much of an already-decided tree gets visited; it
+never changes the decision. Merging the two claims would quietly overstate what the
+optimisation contributes.
+\end{keyidea}
+
+The AI is fully deterministic: no randomness, ties broken by board order. On an
+empty board it therefore always opens at index 0, the top-left corner.
+
+% =========================================================================
+\section{The window}
+
+\file{main.py} is one class, \code{TicTacToeApp}. It builds a status label, two mode
+radio buttons, a mark chooser that is hidden until AI mode is selected, nine gridded
+buttons, ``Play again'', and a score line. It holds the board, whose turn it is, two
+booleans (\code{game\_over}, \code{ai\_thinking}) and two score dictionaries. It holds
+no rules. The AI's mark is not even stored; it is a property computing
+\code{other\_mark(self.human\_mark.get())} on every read, so it cannot drift out of
+sync with the radio button.
+
+\begin{figure}[H]
+\centering
+\resizebox{0.94\textwidth}{!}{
+\begin{tikzpicture}[node distance=14mm and 24mm]
+  \node[box] (human) {\textbf{HUMAN\_TURN}\\\scriptsize clicks accepted};
+  \node[box, right=of human] (think) {\textbf{AI\_THINKING}\\\scriptsize clicks ignored};
+  \node[box, below=of think] (aiturn) {\textbf{AI\_MOVED}};
+  \node[box, below=of human] (done) {\textbf{ROUND\_OVER}\\\scriptsize score recorded,\\\scriptsize winning line gold};
+
+  \draw[flow] (human) -- node[lbl, above] {click, game continues,\\vs AI mode} (think);
+  \draw[dflow] (think) -- node[lbl, right] {after 400\,ms} (aiturn);
+  \draw[flow] (aiturn) -- node[lbl, above] {game continues} (human);
+  \draw[flow] (human) -- node[lbl, left] {a line completes,\\or the board fills} (done);
+  \draw[flow] (aiturn) to[bend left=20] node[lbl, below] {AI ends it} (done);
+  \draw[flow] (done) to[out=160, in=200, looseness=3.2] node[lbl, left] {Play again} (human);
+  \draw[flow] (human) to[out=110, in=70, looseness=4] node[lbl, above] {two-player mode:\\turn switches, same state} (human);
+\end{tikzpicture}}
+\caption{One round. In two-player mode only the self-loop is ever used.}
+\end{figure}
+
+Three points of substance:
+
+\textbf{Every click passes three guards.} Round over or AI pending; the AI's turn in
+AI mode; and the cell already taken. The third is delegated: the GUI does not inspect
+the board, it calls \code{make\_move} and reads the boolean. The rules layer is the
+authority even on the trivial question.
+
+\textbf{The 400\,ms pause is cosmetic, and correctly implemented.} The move is
+computed in about 0.055 seconds, so it would otherwise appear instantly. The source
+comment is explicit that the delay exists ``so the AI doesn't feel like it's snapping
+the board shut''. It uses \code{root.after}, not \code{time.sleep}: sleeping would
+block tkinter's event loop and freeze the whole window for 400\,ms. The
+\code{ai\_thinking} flag is what stops the human clicking during a window that stays
+deliberately alive.
+
+\textbf{Two score dictionaries, keyed differently, on purpose.} Two-player scores are
+keyed by mark; AI-mode scores by role (\code{"human"} / \code{"ai"}). In AI mode the
+player can switch sides between rounds, so a mark-keyed tally would scatter one
+person's wins across two counters. Different question, different key.
+
+% =========================================================================
+\section{The proof, and I reran it}
+
+\file{tests/verify\_unbeatable.py} attacks the claim three ways, each for both
+starting orders, and exits non-zero with the losing board if the AI loses once.
+
+\begin{keyidea}{Why one of the three checks is worth more than the other two}
+Random play can only ever \emph{fail to find} a counterexample; it samples, so a
+loss needing one exact sequence could hide from a million games. The exhaustive check
+does not sample. At every human turn it recurses into every legal move, so it visits
+every distinct game any human strategy whatsoever could produce against this AI. If a
+loss existed, a leaf of that traversal would be it. That is the gap between ``we did
+not observe a loss'' and ``a loss does not exist'', and the README's own conclusion
+is exactly this: a claim is only worth writing down if something behind it would
+catch the claim being false.
+\end{keyidea}
+
+Every figure the README states reproduces exactly on this machine, in 57 seconds:
+
+\begin{lstlisting}[caption={python3 tests/verify\_unbeatable.py}]
+=== 1. Exhaustive search over every human move sequence ===
+  [human moves first] 569 distinct games explored -> AI won: 386, draws: 183, AI lost: 0
+  [AI moves first] 73 distinct games explored -> AI won: 71, draws: 2, AI lost: 0
+
+=== 2. 1000 games, human plays uniformly random legal moves ===
+  [human moves first] 1000 games -> AI won: 789, draws: 211, AI lost: 0
+  [AI moves first] 1000 games -> AI won: 996, draws: 4, AI lost: 0
+
+=== 3. Both sides play optimally (human also uses minimax) ===
+  [human moves first] outcome: draw
+  [AI moves first] outcome: draw
+
+RESULT: the AI never lost a single game across all checks above.
+\end{lstlisting}
+
+569 and 73 are not the number of Tic Tac Toe games. They are the number reachable
+against this \emph{deterministic} opponent, which answers each position with exactly
+one move. Check 2 is seeded, so 789 and 211 are reproducible rather than typical.
+Check 3 ending in a draw both ways is the game-theoretically correct result for
+perfect play. Alongside it, \file{tests/test\_ai.py} runs six unit tests on specific
+tactical positions; all six pass in 0.047 seconds.
+
+% =========================================================================
+\section{Honest findings}
+
+The AI claim survives scrutiny: it is verified exhaustively and I reproduced the
+verification. The defects are all in the layer nobody tested, which is where one
+would predict them.
+
+\begin{honest}{A reachable GUI bug: the AI can be made to move twice}
+\code{root.after} returns a timer id that \code{after\_cancel} could use. It is
+discarded, and \code{after\_cancel} appears nowhere in the file. So clicking ``Play
+again'' during the AI's 400\,ms pause leaves a live timer that \code{reset\_board}
+cannot stop. Play on and a second timer is scheduled while the first is still
+pending; both fire, and \code{\_make\_ai\_move} re-checks only \code{game\_over}, not
+whose turn it is, so the AI plays a mark out of turn. The fix is two lines: keep the
+id, cancel it in \code{reset\_board}.
+
+The discarded return value and the missing \code{after\_cancel} are verified by
+grep. The resulting double move is \textbf{inferred}: traced through the control
+flow, not observed, because this machine has no display server and no \code{Xvfb} to
+drive the window with.
+\end{honest}
+
+\begin{honest}{Six unit tests, five distinct cases}
+\code{test\_prefers\_win\_over\_block\_when\_both\_available} builds the exact same
+board as \code{test\_takes\_immediate\_winning\_move} and makes the exact same
+assertion. The comment above it is a train of thought that never landed: it spots
+that the win cell and the block cell coincide, writes ``use a layout where winning
+and blocking are genuinely different cells'', abandons a third idea with ``so build a
+cleaner case instead:'' and then rebuilds the original board. The behaviour the test
+is named after is covered by nothing. The comment flags the trap and the code walks
+into it. Verified by comparing the two literals.
+\end{honest}
+
+\begin{honest}{A comment says the AI opens in the centre; it opens in a corner}
+\file{test\_ai.py} claims a centre-first opening ``is what this specific minimax
+tie-breaking $\dots$ should produce''. It produces index 0, because 0 is enumerated
+before 4 and both score 0. The comment half-catches itself and the assertion is
+loosened to accept any corner or the centre, so the test is green and its prose is
+wrong. Both openings are game-theoretically fine, so nothing is broken; the reasoning
+is just stale. Verified by calling the function.
+\end{honest}
+
+\begin{honest}{Nothing tests \file{main.py} at all}
+The verification exercises \file{game.py} only. Every GUI claim in this document is
+read, not run. That is an honest allocation of effort, since the interesting logic is
+all in the other file, but it does mean the timer bug above could never have been
+caught by the suite as it stands.
+\end{honest}
+
+\begin{honest}{Smaller things, stated plainly}
+\file{docs/screenshots/app.png} shows a build with no mode radio buttons and no mark
+chooser, which the current \code{\_build\_layout} cannot produce; it predates the AI
+mode (verified by viewing it, and it is not referenced from the README, so no false
+claim is made). \code{\_finish\_turn\_if\_over} takes a \code{mark\_just\_played}
+argument that its body never reads, and both call sites dutifully pass one.
+\code{make\_move} will accept any string as a mark, and \code{other\_mark} has no
+third branch; neither is reachable from the real callers. The 10 in
+\code{\_score\_terminal} must exceed the maximum depth of 9 or wins would read as
+losses, and nothing in the code, the comments or the README says so (that constraint
+is my reading of the arithmetic, so: \textbf{inferred}). Scores are in-memory only
+and reset when the window closes, which the README already names as a known gap.
+\end{honest}
+
+% =========================================================================
+\section{What to take away}
+
+At this size the layer split looks like over-engineering. It is the opposite. It is
+the only reason the project's one substantive claim is checkable at all, and the
+project knows it: the README's stated lesson is that ``unbeatable'' is worth writing
+down only because an exhaustive enumeration behind it would catch the claim being
+false, where random simulation never could. The same instinct shows up in miniature
+throughout, in \code{WIN\_LINES} replacing eight branches with eight tuples, in
+\code{ai\_mark} being derived instead of stored, and in the refusal to credit
+alpha-beta for a guarantee it does not provide.
+
+The AI is correct and proven. The window is untested and has at least one real bug in
+it. Both halves of that sentence are the honest read.
+
+% =========================================================================
+\section*{Glossary}
+\addcontentsline{toc}{section}{Glossary}
+
+\begin{description}[leftmargin=!, labelwidth=3.4cm, style=nextline, itemsep=3pt]
+\item[Module] One \file{.py} file. \code{import game} runs \file{game.py} once and
+  hands back what it defined.
+\item[tkinter] The graphical toolkit that ships inside Python. Windows, buttons,
+  labels, and an event loop. No installation on Windows or macOS; on Debian and
+  Ubuntu it is the separate \code{python3-tk} system package.
+\item[Standard library] Modules arriving with Python itself. This project uses only
+  \code{tkinter}, \code{math}, \code{random} and \code{unittest}, which is why
+  \file{requirements.txt} lists no packages, only a comment saying there are none.
+\item[Widget] One on-screen thing. Widgets form a tree; the window is that tree
+  drawn.
+\item[pack / grid] tkinter's two layout managers. \code{pack} stacks children in
+  order, \code{grid} places them in rows and columns. Never mixed inside one parent;
+  here the frames are packed and the nine cells are gridded.
+\item[Event loop] \code{root.mainloop()}. Waits for clicks and timers and calls your
+  functions. While your function runs, the loop is blocked and the window is frozen,
+  which is why \code{time.sleep} would be the wrong way to pause.
+\item[root.after(ms, fn)] Ask the event loop to call \code{fn} once, later, and
+  return immediately. Not a thread, not a sleep. Returns a cancellable id, which
+  this code discards.
+\item[tk.StringVar] A tkinter box holding a string that widgets watch. Both radios
+  in a group share one; clicking writes its value in. Read with \code{.get()}.
+\item[Game tree] Every way the game can unfold. Root is now, branches are legal
+  moves, leaves are finished games.
+\item[Recursion] A function calling itself on a smaller version of the problem,
+  stopping at a base case where the answer is obvious. Here the base case is ``the
+  game is over, so the score is a fact''.
+\item[Minimax] Search the whole game tree; maximise on your turns, minimise on the
+  opponent's. Assumes perfect defence, which is why the result holds against any
+  opponent.
+\item[depth] How many moves deep in the search a board is. The board passed to
+  \code{best\_ai\_move} is depth 0.
+\item[Alpha-beta pruning] Skip branches that cannot change the answer. A pure
+  speedup. Never changes the move chosen.
+\item[math.inf] Positive infinity as a float. Seeds the maximiser at \code{-inf} so
+  the first real score is always an improvement.
+\item[Unit test] A function that sets up one situation, runs one piece of code, and
+  asserts the answer. Python's \code{unittest} module provides the machinery.
+\end{description}
+
+\end{document}
